@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2018, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 1993-2019, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -60,6 +60,9 @@ typedef struct {
   FILE *asmfil;    /* file pointer for output assembly file */
   FILE *stbfil;    /* file pointer for symbols and datatype for llvm compiler */
   int eof_flag;
+  char *ompaccfilename;	/** pointer to the device file name for openmp gpu offload */
+  FILE *ompaccfile;	/** file pointer for device code */
+  SPTR ompoutlinedfunc;
   SPTR currsub;    /* symtab ptr to current subprogram */
   SPTR caller;     /* symtab ptr to current caller (for bottom-up inlining) */
   int cgr_index;   /* call graph index to current subprogram */
@@ -136,16 +139,24 @@ typedef struct {
   char *fn;     /* name of file being compiled passed from the FE */
   int cuda_constructor;
   int cudaemu; /* emulating CUDA device code */
+  int pcast;      /* bitmask for PCAST features */
 #ifdef PGF90
   SPTR typedescs; /* list of type descriptors */
 #endif
   bool denorm; /* enforce denorm for the current subprogram */
   int outlined;   /* is outlined function .*/
   int usekmpc;    /* use KMPC runtime. turned on for -ta=multicore for llvm. */
+#ifdef OMP_OFFLOAD_LLVM
+  bool isnvvmcodegen; /* set when generating code for device */
+  bool inomptarget;
+#endif
 } GBL;
 
 #undef MAXCPUS
 #define MAXCPUS 256
+
+/* mask values for gbl.pcast */
+#define PCAST_CODE 1
 
 extern GBL gbl;
 #define GBL_CURRFUNC gbl.currsub
@@ -199,6 +210,7 @@ typedef struct {
   char *stdinc; /* NULL => use std include; 1 ==> do not look in
                  * std dir; o.w., use value as the std dir */
   bool smp;  /* TRUE => allow smp directives */
+  bool omptarget;  /** TRUE => allow omp accel directives */
   int errorlimit;
   bool trans_inv; /* global equiv to -Mx,7,0x10000 */
   int tpcount;

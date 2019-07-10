@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2000-2019, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1685,6 +1685,13 @@ dastreex(int astx, int l, int notlast)
   case A_MP_BCOPYPRIVATE:
   case A_MP_COPYPRIVATE:
   case A_MP_ECOPYPRIVATE:
+  case A_MP_MAP:
+  case A_MP_EMAP:
+  case A_MP_TARGETLOOPTRIPCOUNT:
+  case A_MP_DISTRIBUTE:
+  case A_MP_EREDUCTION:
+  case A_MP_BREDUCTION:
+  case A_MP_REDUCTIONITEM:
     break;
   default:
     fprintf(gbl.dbgfil, "NO DUMP AVL");
@@ -2249,6 +2256,8 @@ dstd(int stdx)
   putint("ast", astx);
   putnzint("lineno", STD_LINENO(stdx));
   putnsym("label", STD_LABEL(stdx));
+  if (STD_BLKSYM(stdx) != SPTR_NULL)
+    putnsym("blksym", STD_BLKSYM(stdx));
   putint("prev", STD_PREV(stdx));
   putint("next", STD_NEXT(stdx));
 #ifdef STD_TAG
@@ -2268,6 +2277,8 @@ dstd(int stdx)
   putbit("par", STD_PAR(stdx));
   putbit("cs", STD_CS(stdx));
   putbit("accel", STD_ACCEL(stdx));
+  putbit("rescope", STD_RESCOPE(stdx));
+  putbit("indiv", STD_INDIVISIBLE(stdx));
   putbit("atomic", STD_ATOMIC(stdx));
   putbit("kernel", STD_KERNEL(stdx));
   putbit("task", STD_TASK(stdx));
@@ -3328,6 +3339,8 @@ dsym(int sptr)
     HIDDENP(0, 0);
     putbit("inmodule", INMODULEG(0));
     INMODULEP(0, 0);
+    putbit("ancestor", ANCESTORG(0));
+    ANCESTORP(0, 0);
     putbit("internal", INTERNALG(0));
     INTERNALP(0, 0);
     putbit("mscall", MSCALLG(0));
@@ -3473,6 +3486,8 @@ dsym(int sptr)
     DINITP(0, 0);
     putbit("needmod", NEEDMODG(0));
     NEEDMODP(0, 0);
+    putbit("ancestor", ANCESTORG(0));
+    ANCESTORP(0, 0);
     putbit("typd", TYPDG(0));
     TYPDP(0, 0);
     putbit("visit", VISITG(0));
@@ -3556,6 +3571,8 @@ dsym(int sptr)
     INDEPP(0, 0);
     putbit("inmodule", INMODULEG(0));
     INMODULEP(0, 0);
+    putbit("ancestor", ANCESTORG(0));
+    ANCESTORP(0, 0);
     putbit("internal", INTERNALG(0));
     INTERNALP(0, 0);
 #ifdef L3FG
@@ -3836,6 +3853,10 @@ dsym(int sptr)
     putnsym("slnk", SLNKG(0));
     SLNKP(0, 0);
     putline();
+#ifdef CONSTANTG
+    putbit("constant", CONSTANTG(0));
+    CONSTANTP(0, 0);
+#endif
     putbit("dcld", DCLDG(0));
     DCLDP(0, 0);
     putbit("end", ENDG(0));

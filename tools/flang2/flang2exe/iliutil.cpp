@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-2018, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 1993-2019, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,6 +44,7 @@
 #include "scutil.h"
 #include "symfun.h"
 
+
 /*
  * MTH, FMTH, ... names
  */
@@ -68,6 +69,7 @@ union ATOMIC_ENCODER {
 
 bool share_proc_ili = false;
 bool share_qjsr_ili = false;
+extern bool ishft;
 
 static int addarth(ILI *);
 static int red_iadd(int, INT);
@@ -1740,11 +1742,11 @@ lg(unsigned d)
 } /* lg */
 
 static int
-lg64(UINT64 d)
+lg64(DBLUINT64 d)
 {
   int i = 0;
-  UINT64 twoi = {0x0, 0x1};
-  UINT64 dd;
+  DBLUINT64 twoi = {0x0, 0x1};
+  DBLUINT64 dd;
 
   dd[0] = d[0];
   dd[1] = d[1];
@@ -1763,20 +1765,20 @@ lg64(UINT64 d)
  * (don't want 2**(2*N))
  */
 static int shpost;
-static INT64 mrecip;
-static INT64 twon, twonm1;
+static DBLINT64 mrecip;
+static DBLINT64 twon, twonm1;
 
 void
 choose_multiplier(int N, unsigned dd, int prec)
 {
-  INT64 mlow, mhigh, d, mlow2, mhigh2;
+  DBLINT64 mlow, mhigh, d, mlow2, mhigh2;
   int l;
 
   l = lg(dd); /* ceiling(lg(d)) */
   shpost = l;
 
   d[0] = 0;
-  d[1] = dd; /* INT64 copy of d */
+  d[1] = dd; /* DBLINT64 copy of d */
 
   twon[0] = 0; /* twon is 2**N, used for comparisons */
   twon[1] = 1;
@@ -1820,7 +1822,7 @@ static INT128 mrecip_128;
 static INT128 twon_128, twonm1_128;
 
 void
-choose_multiplier_64(int N, UINT64 dd, int prec)
+choose_multiplier_64(int N, DBLUINT64 dd, int prec)
 {
   INT128 mlow, mhigh, d, mlow2, mhigh2;
   int l;
@@ -1831,7 +1833,7 @@ choose_multiplier_64(int N, UINT64 dd, int prec)
   d[0] = 0;
   d[1] = 0;
   d[2] = dd[0];
-  d[3] = dd[1]; /* INT64 copy of d */
+  d[3] = dd[1]; /* DBLINT64 copy of d */
 
   /* twon is 2**N, used for comparisons */
   twon_128[0] = 0;
@@ -2122,10 +2124,10 @@ reciprocal_division(int n, INT divisor, int sgnd)
       q = ad1ili(IL_INEG, q);
     }
   } else {
-    INT64 twol;
+    DBLINT64 twol;
     int shpre = 0;
-    INT64 one_64 = {0x0, 0x1};
-    INT64 divisor64 = {0x0, (int)udiv};
+    DBLINT64 one_64 = {0x0, 0x1};
+    DBLINT64 divisor64 = {0x0, (int)udiv};
     const int l = lg(udiv);
 
     shf64(one_64, l, twol);
@@ -2178,7 +2180,7 @@ reciprocal_division(int n, INT divisor, int sgnd)
 }
 
 static int
-reciprocal_division_64(int n, INT64 divisor, int sgnd)
+reciprocal_division_64(int n, DBLINT64 divisor, int sgnd)
 {
 
   /* TBD: 64-bit divides */
@@ -2186,10 +2188,10 @@ reciprocal_division_64(int n, INT64 divisor, int sgnd)
   int l, mp, sh, N;
   int t1, t2, q0, q3, q, recipsym;
   /*unsigned udiv;*/
-  UINT64 udiv;
-  INT64 tmp_64;
-  static INT64 zero_64 = {0, 0}, one_64 = {0x0, 0x1};
-  static INT64 min_neg_64 = {(INT)0x80000000, 0x0};
+  DBLUINT64 udiv;
+  DBLINT64 tmp_64;
+  static DBLINT64 zero_64 = {0, 0}, one_64 = {0x0, 0x1};
+  static DBLINT64 min_neg_64 = {(INT)0x80000000, 0x0};
 
   /* edge case, doesn't work */
   if (cmp64(divisor, zero_64) == 0)
@@ -2244,7 +2246,7 @@ reciprocal_division_64(int n, INT64 divisor, int sgnd)
       q = ad1ili(IL_KNEG, q);
     }
   } else {
-    INT64 twol;
+    DBLINT64 twol;
     int shpre = 0;
     const int l = lg64(udiv);
 
@@ -2316,7 +2318,7 @@ reciprocal_mod(int n, int d, int sgnd)
 }
 
 static int
-reciprocal_mod_64(int n, INT64 d, int sgnd)
+reciprocal_mod_64(int n, DBLINT64 d, int sgnd)
 {
   int div, kcon;
   int mul, sub, t0;
@@ -3736,6 +3738,7 @@ addarth(ILI *ilip)
       return ad1ili(IL_KNEG, ad2ili(IL_KMUL, op1, ILI_OPND(op2, 1)));
     }
     break;
+
   case IL_FMUL:
     if (!flg.ieee) {
       if (ncons == 2) {
@@ -3757,15 +3760,17 @@ addarth(ILI *ilip)
         goto add_rcon;
       }
     }
-    /* FMUL FNEG x, y --> FNEG FMUL x,y */
+    /* FMUL FNEG x, FNEG y --> FMUL x,y */
     if (ILI_OPC(op1) == IL_FNEG && ILI_OPC(op2) == IL_FNEG) {
       op1 = ILI_OPND(op1, 1);
       op2 = ILI_OPND(op2, 1);
       break;
     }
+    /* FMUL FNEG x, y --> FNEG FMUL x,y */
     if (ILI_OPC(op1) == IL_FNEG) {
       return ad1ili(IL_FNEG, ad2ili(IL_FMUL, ILI_OPND(op1, 1), op2));
     }
+    /* FMUL x, FNEG y --> FNEG FMUL x,y */
     if (ILI_OPC(op2) == IL_FNEG) {
       return ad1ili(IL_FNEG, ad2ili(IL_FMUL, op1, ILI_OPND(op2, 1)));
     }
@@ -4215,10 +4220,10 @@ addarth(ILI *ilip)
           }
         }
       }
-#endif /*} hardware divide */
+#endif /* defined(TARGET_X8664) || defined(TARGET_POWER) */
     }
     break;
-#endif
+#endif /*} hardware divide */
 #ifndef TM_FDIV /*{ no hardware divide */
 #ifdef TM_FRCP  /*{ mult - recip */
     /* perform divide by reciprocal approximation */
@@ -5350,7 +5355,11 @@ addarth(ILI *ilip)
     } else if (ncons == 3) {
       tmp = con2v2;
       if (SHIFTOK(tmp)) {
-        res.numi[1] = URSHIFT(con1v2, tmp);
+        if (ishft) {
+          res.numi[1] = ARSHIFT(con1v2, tmp);
+        } else {
+          res.numi[1] = URSHIFT(con1v2, tmp);
+        }
         goto add_icon;
       }
     }
@@ -6819,6 +6828,18 @@ addarth(ILI *ilip)
     root = "log10";
     mth_fn = MTH_log10;
     goto do_vect1;
+  case IL_VFLOOR:
+    root = "floor";
+    mth_fn = MTH_floor;
+    goto do_vect1;
+  case IL_VCEIL:
+    root = "ceil";
+    mth_fn = MTH_ceil;
+    goto do_vect1;
+  case IL_VAINT:
+    root = "aint";
+    mth_fn = MTH_aint;
+    goto do_vect1;
   do_vect1:
     mask_ili = ilip->opnd[1];
     if (ILI_OPC(mask_ili) == IL_NULL) /* no mask */
@@ -6929,6 +6950,19 @@ addarth(ILI *ilip)
 #endif
         vdt2 = DT_INT;
       }
+    } else if (IL_TYPE(ILI_OPC(op2)) == ILTY_MOVE) {
+      switch(IL_RES(ILI_OPC(op2)))
+      {
+        case ILIA_IR:
+          vdt2 = DT_INT;
+          break;
+        case ILIA_KR:
+          vdt2 = DT_INT8;
+          break;
+        default:
+          assert(0, "addarth(): bad move result for operand 2", 
+                 IL_RES(ILI_OPC(op2)), ERR_Fatal);
+      }
     } else
       assert(0, "addarth(): bad type for operand 2", IL_TYPE(ILI_OPC(op2)),
              ERR_Fatal);
@@ -6962,7 +6996,128 @@ addarth(ILI *ilip)
     break;
 #endif /* LONG_DOUBLE_FLOAT128 */
 
+  case IL_FCEIL:
+    if (XBIT_NEW_MATH_NAMES) {
+      fname = make_math(MTH_ceil, &funcsptr, 1, false, DT_FLOAT, 1, DT_FLOAT);
+      ilix = ad_func(IL_spfunc, IL_QJSR, fname, 1, op1);
+      ilix = ad1altili(opc, op1, ilix);
+      return ilix;
+    }
+#if defined(TARGET_LLVM_ARM) || defined(TARGET_WIN)
+    else {
+      (void)mk_prototype(MTH_I_FCEIL, "f pure", DT_FLOAT, 1, DT_FLOAT);
+      ilix = ad_func(IL_spfunc, IL_QJSR, MTH_I_FCEIL, 1, op1);
+      return ad1altili(opc, op1, ilix);
+    }
+#else
+    else
+      interr("addarth: old math name for ili not handled",
+             opc, ERR_Informational);
+#endif
+    break;
+
+  case IL_DCEIL:
+    if (XBIT_NEW_MATH_NAMES) {
+      fname = make_math(MTH_ceil, &funcsptr, 1, false, DT_DBLE, 1, DT_DBLE);
+      ilix = ad_func(IL_dpfunc, IL_QJSR, fname, 1, op1);
+      ilix = ad1altili(opc, op1, ilix);
+      return ilix;
+    }
+#if defined(TARGET_LLVM_ARM) || defined(TARGET_WIN)
+    else {
+      (void)mk_prototype(MTH_I_DCEIL, "f pure", DT_DBLE, 1, DT_DBLE);
+      ilix = ad_func(IL_dpfunc, IL_QJSR, MTH_I_DCEIL, 1, op1);
+      return ad1altili(opc, op1, ilix);
+    }
+#else
+    else
+      interr("addarth: old math name for ili not handled",
+             opc, ERR_Informational);
+#endif
+    break;
+
+  case IL_FFLOOR:
+    if (XBIT_NEW_MATH_NAMES) {
+      fname = make_math(MTH_floor, &funcsptr, 1, false, DT_FLOAT, 1, DT_FLOAT);
+      ilix = ad_func(IL_spfunc, IL_QJSR, fname, 1, op1);
+      ilix = ad1altili(opc, op1, ilix);
+      return ilix;
+    }
+#if defined(TARGET_LLVM_ARM) || defined(TARGET_WIN)
+    else {
+      (void)mk_prototype(MTH_I_FFLOOR, "f pure", DT_FLOAT, 1, DT_FLOAT);
+      ilix = ad_func(IL_spfunc, IL_QJSR, MTH_I_FFLOOR, 1, op1);
+      return ad1altili(opc, op1, ilix);
+    }
+#else
+    else
+      interr("addarth: old math name for ili not handled",
+             opc, ERR_Informational);
+#endif
+    break;
+
+  case IL_DFLOOR:
+    if (XBIT_NEW_MATH_NAMES) {
+      fname = make_math(MTH_floor, &funcsptr, 1, false, DT_DBLE, 1, DT_DBLE);
+      ilix = ad_func(IL_dpfunc, IL_QJSR, fname, 1, op1);
+      ilix = ad1altili(opc, op1, ilix);
+      return ilix;
+    }
+#if defined(TARGET_LLVM_ARM) || defined(TARGET_WIN)
+    else {
+      (void)mk_prototype(MTH_I_DFLOOR, "f pure", DT_DBLE, 1, DT_DBLE);
+      ilix = ad_func(IL_dpfunc, IL_QJSR, MTH_I_DFLOOR, 1, op1);
+      return ad1altili(opc, op1, ilix);
+    }
+#else
+    else
+      interr("addarth: old math name for ili not handled",
+             opc, ERR_Informational);
+#endif
+    break;
+
+  case IL_AINT:
+    if (XBIT_NEW_MATH_NAMES) {
+      fname = make_math(MTH_aint, &funcsptr, 1, false, DT_FLOAT, 1, DT_FLOAT);
+      ilix = ad_func(IL_spfunc, IL_QJSR, fname, 1, op1);
+      ilix = ad1altili(opc, op1, ilix);
+      return ilix;
+    }
+#if defined(TARGET_LLVM_ARM) || defined(TARGET_WIN)
+    else {
+      (void)mk_prototype(MTH_I_AINT, "f pure", DT_FLOAT, 1, DT_FLOAT);
+      ilix = ad_func(IL_spfunc, IL_QJSR, MTH_I_AINT, 1, op1);
+      return ad1altili(opc, op1, ilix);
+    }
+#else
+    else
+      interr("addarth: old math name for ili not handled",
+             opc, ERR_Informational);
+#endif
+    break;
+
+  case IL_DINT:
+    if (XBIT_NEW_MATH_NAMES) {
+      fname = make_math(MTH_aint, &funcsptr, 1, false, DT_DBLE, 1, DT_DBLE);
+      ilix = ad_func(IL_dpfunc, IL_QJSR, fname, 1, op1);
+      ilix = ad1altili(opc, op1, ilix);
+      return ilix;
+    }
+#if defined(TARGET_LLVM_ARM) || defined(TARGET_WIN)
+    else {
+      (void)mk_prototype(MTH_I_DINT, "f pure", DT_DBLE, 1, DT_DBLE);
+      ilix = ad_func(IL_dpfunc, IL_QJSR, MTH_I_DINT, 1, op1);
+      return ad1altili(opc, op1, ilix);
+    }
+#else
+    else
+      interr("addarth: old math name for ili not handled",
+             opc, ERR_Informational);
+#endif
+    break;
+
   default:
+
 #if DEBUG
     interr("addarth:ili not handled", opc, ERR_Informational);
 #endif
@@ -7533,7 +7688,8 @@ red_negate(int old, ILI_OP neg_opc, int mult_opc, int div_opc)
     return ad2ili(ILI_OPC(old), op1, op2); /* could be mult or divide */
   }
   if (IL_TYPE(ILI_OPC(op1)) == ILTY_CONS) {
-    if (!XBIT(15, 0x4) || (div_opc != IL_FDIV && div_opc != IL_DDIV)) {
+    if (!XBIT(15, 0x4) || 
+	(div_opc != IL_FDIV && div_opc != IL_DDIV)) {
       /* don't do if mult by recip enabled */
       op1 = ad1ili(neg_opc, op1);
       return ad2ili(ILI_OPC(old), op1, op2); /* should only be a divide */
@@ -8455,6 +8611,8 @@ fold_jmp:
   return 0;
 }
 
+bool is_floating_comparison_opcode(ILI_OP opc);
+
 /** \brief adds a branch ili by complementing the condition
  *
  * This routine adds a branch ili whose condition is the complement of the
@@ -8472,8 +8630,7 @@ compl_br(int ilix, int lbl)
   i = ilis[opc].oprs;
   New.opc = opc;
   New.opnd[--i] = lbl;
-  if (opc == IL_FCJMP || opc == IL_DCJMP || opc == IL_FCJMPZ ||
-      opc == IL_DCJMPZ) {
+  if (is_floating_comparison_opcode(opc)) {
     New.opnd[i - 1] = complement_ieee_cc(CC_ILI_OPND(ilix, i));
   } else {
     New.opnd[i - 1] = complement_int_cc(CC_ILI_OPND(ilix, i));
@@ -9367,6 +9524,21 @@ rewr_(int tree)
         newopnd = opnd;
       } else {
         newopnd = rewr_(opnd);
+        if (newopnd != opnd && IL_RES(ILI_OPC(opnd)) == ILIA_AR) {
+          /* The problem is Fortran Cray pointers, where integer-valued
+           * expressions are stored into integer pointers, which are then
+           * used as pointer values.  The integer-valued pointer is often
+           * converted from an address-valued expression (ACON or the like)
+           * and here we want the address-valued expression or to move it
+           * to an address-valued expression */
+          if (ILI_OPC(newopnd) == IL_AKMV || ILI_OPC(newopnd) == IL_AIMV) {
+            newopnd = ILI_OPND(newopnd, 1);	/* get the address value */
+          } else if (IL_RES(ILI_OPC(newopnd)) == ILIA_KR) {
+            newopnd = ad1ili(IL_KAMV, newopnd);
+          } else if (IL_RES(ILI_OPC(newopnd)) == ILIA_IR) {
+            newopnd = ad1ili(IL_IAMV, newopnd);
+          }
+        }
       }
       newili.opnd[i - 1] = newopnd;
       if (newopnd != opnd)
@@ -9813,7 +9985,7 @@ simplified_cmp_ili(int cmp_ili)
     shared_bin_cmp:
       new_cc = CC_ILI_OPND(new_ili, 3);
       if (invert_cc) {
-        if (new_opc == IL_FCMP || new_opc == IL_DCMP)
+        if (is_floating_comparison_opcode(new_opc))
           new_cc = complement_ieee_cc(new_cc);
         else
           new_cc = complement_int_cc(new_cc);
@@ -9848,7 +10020,7 @@ simplified_cmp_ili(int cmp_ili)
     shared_una_cmp:
       new_cc = CC_ILI_OPND(new_ili, 2);
       if (invert_cc) {
-        if (new_opc == IL_FCMPZ || new_opc == IL_DCMPZ)
+        if (is_floating_comparison_opcode(new_opc))
           new_cc = complement_ieee_cc(new_cc);
         else
           new_cc = complement_int_cc(new_cc);
@@ -10710,6 +10882,7 @@ prilitree(int i)
     fprintf(gbl.dbgfil, "%s0", opval);
     break;
 
+  case IL_HFMAX:
   case IL_FMAX:
   case IL_DMAX:
   case IL_KMAX:
@@ -10717,6 +10890,7 @@ prilitree(int i)
     n = 2;
     opval = "max";
     goto intrinsic;
+  case IL_HFMIN:
   case IL_FMIN:
   case IL_DMIN:
   case IL_KMIN:
@@ -11732,6 +11906,9 @@ mk_address(SPTR sptr)
   }
 
   /* Make an address for an outlined function variable */
+#ifdef OMP_OFFLOAD_LLVM
+  if(!(gbl.outlined && flg.omptarget && gbl.inomptarget))
+#endif
   if ((PARREFG(sptr) || TASKG(sptr)) &&
       (gbl.outlined || ISTASKDUPG(GBL_CURRFUNC))) {
     return ll_uplevel_addr_ili(sptr, is_task_priv);
@@ -12064,6 +12241,9 @@ ili_get_vect_dtype(int ilix)
   case IL_VLOG10:
   case IL_VRCP:
   case IL_VRSQRT:
+  case IL_VFLOOR:
+  case IL_VCEIL:
+  case IL_VAINT:
   case IL_VLD:
   case IL_VLDU:
   case IL_VADD:
@@ -12377,6 +12557,7 @@ int
 is_cseili_opcode(ILI_OP opc)
 {
   switch (opc) {
+  case IL_CSE:
   case IL_CSEIR:
   case IL_CSESP:
   case IL_CSEDP:
@@ -13594,7 +13775,8 @@ make_math_name(MTH_FN fn, int vectlen, bool mask, DTYPE res_dt)
   static char *fn2str[] = {"acos", "asin",  "atan",  "atan2", "cos",    "cosh",
                            "div",  "exp",   "log",   "log10", "pow",    "powi",
                            "powk", "powi1", "powk1", "sin",   "sincos", "sinh",
-                           "sqrt", "tan",   "tanh",  "mod"};
+                           "sqrt", "tan",   "tanh",  "mod", "floor", "ceil",
+                           "aint"};
   char *fstr;
   char ftype = 'f';
   if (flg.ieee)
@@ -14260,3 +14442,4 @@ imin_ili_ili(int leftx, int rightx)
   }
   return ilix;
 } /* imin_ili_ili */
+

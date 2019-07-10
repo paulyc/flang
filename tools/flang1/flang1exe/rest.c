@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1994-2018, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 1994-2019, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -66,6 +66,7 @@ static int remove_subscript_expressions(int ast, int std, int sym);
 static void set_descr_tag(int descr, int tag, int std);
 static int get_descr_arg(int ele, SPTR sptr, int std);
 static int get_descr_or_placeholder_arg(SPTR inface_arg, int ele, int std);
+static int gen_poly_element_arg(int ast, SPTR sptr, int std);
 
 /* rhs_is_dist argument seems to be useless at this point */
 int
@@ -351,6 +352,12 @@ insert_comm_before(int std, int ast, LOGICAL *rhs_is_dist, LOGICAL is_subscript)
   case A_MP_ATOMICWRITE:
   case A_MP_ATOMICUPDATE:
   case A_MP_ATOMICCAPTURE:
+  case A_MP_MAP:
+  case A_MP_TARGETLOOPTRIPCOUNT:
+  case A_MP_EMAP:
+  case A_MP_EREDUCTION:
+  case A_MP_BREDUCTION:
+  case A_MP_REDUCTIONITEM:
     return a;
   default:
     interr("insert_comm_before: unknown expression", std, 2);
@@ -1072,6 +1079,104 @@ get_invoking_proc_desc(int sptr, int ast, int std)
   }
 }
 
+/** \brief Generates a call to a poly_element_addr runtime routine that
+ *         computes the address of a polymorphic array element.
+ *
+ *         This is required when our passed object argument of a type bound
+ *         procedure call is an array element.
+ *
+ *  \param ast is the ast of the passed object argument (an A_SUBSCR ast).
+ *  \param sptr is the symbol table pointer of the passed object argument.
+ *  \param std is the current statement descriptor.
+ *
+ *  \return an ast that represents the pointer that holds the address of the
+ *          polymorphic array element. 
+ */
+static int
+gen_poly_element_arg(int ast, SPTR sptr, int std) 
+{
+
+  SPTR func, tmp, ptr, sdsc;
+  int astnew, args;
+  int asd, numdim, i, ss;
+  int tmp_ast, ptr_ast, sdsc_ast;
+  DTYPE dtype;
+  FtnRtlEnum rtlRtn;
+
+  dtype = DTYPEG(sptr);
+
+  assert(DTY(dtype) == TY_ARRAY, "gen_poly_element_arg: Expected array dtype",
+             dtype, 4);
+
+  dtype = DTY(dtype+1);
+
+  asd = A_ASDG(ast);
+  numdim = ASD_NDIM(asd);
+  args = mk_argt(3+numdim);
+
+  for (i = 0; i < numdim; ++i) {
+    ss = ASD_SUBS(asd, i);
+    ARGT_ARG(args, 3+i) = ss;
+  }
+
+  ARGT_ARG(args, 0) = A_LOPG(ast);
+
+  do {
+    if (STYPEG(sptr) == ST_MEMBER) {
+      sdsc = get_member_descriptor(sptr);
+    } else {
+      sdsc = SDSCG(sptr);
+    }
+    if (sdsc > NOSYM) {
+      break;
+    }
+    get_static_descriptor(sptr);
+    assert(SDSCG(sptr) > NOSYM, "gen_poly_element_arg: get_static_descriptor "
+           "failed", sptr, 4); /* sanity check */
+  }while(true); 
+
+  sdsc_ast = mk_id(sdsc);
+  
+  ARGT_ARG(args, 1) = check_member(ast, sdsc_ast);
+
+  switch(numdim) {
+  case 1:
+    rtlRtn = RTE_poly_element_addr1;
+    break;
+  case 2:
+    rtlRtn = RTE_poly_element_addr2;
+    break;
+  case 3:
+    rtlRtn = RTE_poly_element_addr3;
+    break;
+  default:
+    rtlRtn = RTE_poly_element_addr;
+  }
+    
+  func = mk_id(sym_mkfunc_nodesc(mkRteRtnNm(rtlRtn), DT_NONE));
+
+  tmp = getccsym_sc('d', sem.dtemps++, ST_ARRAY, SC_LOCAL);
+  DTYPEP(tmp, dtype);
+  POINTERP(tmp, 1);
+  tmp_ast = mk_id(tmp);
+  A_DTYPEP(tmp_ast, dtype);
+  A_PTRREFP(tmp_ast, 1);
+  ARGT_ARG(args, 2) = tmp_ast;
+
+  astnew = mk_func_node(A_CALL, func, 3+numdim, args);
+      
+  std = add_stmt_before(astnew, std);
+ 
+  ptr = getccsym_sc('d', sem.dtemps++, ST_VAR, SC_LOCAL);
+  DTYPEP(ptr, dtype);
+  POINTERP(ptr, 1);
+  ptr_ast = mk_id(ptr);
+        
+  astnew = add_ptr_assign(ptr_ast, tmp_ast, std);
+  add_stmt_after(astnew, std);
+  
+  return  ptr_ast;
+}
 
 
 /** \brief The following code takes a function or subroutine call and adds
@@ -1311,6 +1416,24 @@ transform_call(int std, int ast)
       inface_arg = aux.dpdsc_base[dscptr + i];
     }
     /* initialize */
+    if (A_TYPEG(ele) == A_FUNC && CFUNCG(entry)) {
+      SPTR arg = memsym_of_ast(ele);
+      if (CFUNCG(arg)) {
+        /* When a BIND(C) function result is used as an argument
+         * to another BIND(C) function, assign the result to a temp
+         * to ensure that the result is passed by value, not by reference.
+         */
+        int tmp_ast, assn_ast;
+        SPTR tmp = getccsym_sc('d', sem.dtemps++, DTY(DTYPEG(arg)) == TY_ARRAY 
+                               ? ST_ARRAY : ST_VAR, SC_LOCAL);
+        DTYPEP(tmp, DTYPEG(arg));
+        tmp_ast = mk_id(tmp);
+        assn_ast = mk_assn_stmt(tmp_ast, ele, DTYPEG(arg));
+        add_stmt_before(assn_ast, std);
+        ele = tmp_ast;
+        ARGT_ARG(argt, i) = ele;
+      }
+    }
     ARGT_ARG(newargt, newi) = ele;
     ++newi;
 
@@ -1350,6 +1473,11 @@ transform_call(int std, int ast)
       inface_arg = aux.dpdsc_base[dscptr + i];
       needdescr = needs_descriptor(inface_arg);
       /* actually, only for pointer or assumed-shape arguments dummy */
+      if (XBIT(54, 0x80) && inface_arg > NOSYM && ast_is_sym(ele) &&
+          needs_descriptor(memsym_of_ast(ele))) {
+        /* Generate contiguity check at call-site */
+        gen_contig_check(mk_id(inface_arg), ele, 0, gbl.lineno, true, std); 
+      }
     }
     if (ele == 0) {
       ARGT_ARG(newargt, newi) = ele;
@@ -1487,16 +1615,24 @@ transform_call(int std, int ast)
         ++newi;
         needdescr = needs_descriptor(inface_arg);
         if (needdescr) {
-          if (STYPEG(sptr) == ST_PROC) {
-            int tmp = get_proc_ptr(sptr);
-            if (INTERNALG(sptr)) {
-              add_ptr_assign(mk_id(tmp), ele, std);
-              A_INVOKING_DESCP(ast, mk_id(SDSCG(tmp)));
+          if (STYPEG(sptr) == ST_PROC && (SCG(sptr) != SC_DUMMY || 
+              SDSCG(sptr))) {
+            if (SCG(sptr) != SC_DUMMY) {
+              int tmp = get_proc_ptr(sptr);
+              if (INTERNALG(sptr)) {
+                add_ptr_assign(mk_id(tmp), ele, std);
+              }
+              ARGT_ARG(newargt, newj) = mk_id(SDSCG(tmp));
+            } else {
+              ARGT_ARG(newargt, newj) = mk_id(SDSCG(sptr));
             }
-            ARGT_ARG(newargt, newj) = mk_id(SDSCG(tmp));
           } else {
             ARGT_ARG(newargt, newj) = get_descr_or_placeholder_arg(inface_arg,
                                                                    ele, std);
+          }
+          if (INTERNALG(entry)) {
+            int tmp = get_proc_ptr(entry);
+            A_INVOKING_DESCP(ast, mk_id(SDSCG(tmp)));
           }
           ++newj;
         }
@@ -1578,7 +1714,14 @@ transform_call(int std, int ast)
             /*(CLASSG(inface_arg) && !needdescr) ||
                     (ALLOCDESCG(inface_arg) && needdescr)*/ CLASSG(inface_arg)) {
           int tmp = 0;
-          if (A_TYPEG(ele) == A_SUBSCR) {
+          if (i == (tbp_inv-1) && CLASSG(sptr) && !MONOMORPHICG(sptr) &&
+              A_TYPEG(ele) == A_SUBSCR) {
+            /* We have a polymorphic subscripted pass argument. Need to
+             * compute its address based on the polymorphic size of the
+             * object.
+             */
+             ARGT_ARG(newargt, newi) = gen_poly_element_arg(ele, sptr, std);
+          } else if (A_TYPEG(ele) == A_SUBSCR) {
             /* This case occurs when we branch from
              * the A_SUBSCR case below to the class_arg label above.
              */
@@ -2493,8 +2636,11 @@ handle_seq_section(int entry, int arr, int loc, int std, int *retval,
       } else {
         /* right now, no members can be distributed anyway */
         arrayalign = ALIGNG(arraysptr);
-        if (POINTERG(arraysptr) && !arrayalign)
-          is_seq_pointer = TRUE;
+       if (POINTERG(arraysptr)) {
+         is_pointer = TRUE;
+         if (!arrayalign)
+           is_seq_pointer = TRUE;
+       }
       }
       break;
     default:
@@ -2507,8 +2653,16 @@ handle_seq_section(int entry, int arr, int loc, int std, int *retval,
   if (DTY(topdtype) == TY_ARRAY)
     topdtype = DTY(topdtype + 1);
 
-  if (simplewholearray && CONTIGATTRG(arraysptr)) {
-    *retval = arr;
+  if (simplewholearray && !is_pointer && CONTIGATTRG(arraysptr)) {
+    /* Note: The call to first_element() uses the descriptor of the declared
+     * dtype of arr which is fine for simple regular arrays. But it does not 
+     * work for pointers since a pointer's descriptor can change depending on 
+     * the pointer target. Typically this is accomplished by creating a section
+     * descriptor first (i.e., call mk_descr_from_section()) which takes into 
+     * account the runtime shape of the pointer target. We handle this and
+     * other pointer cases below. 
+     */ 
+    *retval = first_element(arr); 
     *descr = DESCRG(arraysptr) > NOSYM ?
       check_member(arrayast, mk_id(DESCRG(arraysptr))) : 0;
     return;
@@ -4172,6 +4326,12 @@ transform_all_call(int std, int ast)
   case A_MP_ATOMICWRITE:
   case A_MP_ATOMICUPDATE:
   case A_MP_ATOMICCAPTURE:
+  case A_MP_MAP:
+  case A_MP_TARGETLOOPTRIPCOUNT:
+  case A_MP_EMAP:
+  case A_MP_EREDUCTION:
+  case A_MP_BREDUCTION:
+  case A_MP_REDUCTIONITEM:
     return a;
   case A_PRAGMA:
     return a;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2018, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2015-2019, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1111,15 +1111,10 @@ getdumlen(void)
   return sym;
 }
 
-/** \brief Create a symbol representing the length of a passed-length character
- * argument in the host subprogram.
- */
-int
+SPTR
 gethost_dumlen(int arg, ISZ_T address)
 {
-  int sym;
-
-  sym = getccsym('U', arg, ST_VAR);
+  SPTR sym = getccsym('U', arg, ST_VAR);
   if (CHARLEN_64BIT) {
     DTYPEP(sym, DT_INT8);
   } else {
@@ -1612,8 +1607,8 @@ scan_args:
         src_addr = ad_acon(argsym, 0);
         src_nme = NME_VOL;
         n = size_of(DTYPEG(newsptr));
-        chk_block(ad4ili(IL_SMOVEI, ad2ili(IL_SMOVES, src_addr, src_nme),
-                         dest_addr, n, dest_nme));
+        chk_block(ad5ili(IL_SMOVEJ, src_addr, dest_addr, src_nme, dest_nme,
+                         n));
       }
     } else {
       pf->mem_off += 4;
@@ -2290,7 +2285,7 @@ exp_end_ret:
   }
 
   /* emit any mp initialization for the function & its entries */
-  exp_mp_func_prologue();
+  exp_mp_func_prologue(true);
 
   if (!XBIT(121, 0x01) ||                  /* -Mnoframe isn't specified */
       (flg.debug && !XBIT(123, 0x400)) ||  /* -debug is set */
@@ -2801,6 +2796,7 @@ static void from_addr_and_length(STRDESC *s, ainfo_t *ainfo_ptr);
 static void arg_ir(int, ainfo_t *);
 static void arg_kr(int, ainfo_t *);
 static void arg_ar(int, ainfo_t *, int);
+static void arg_hp(int, ainfo_t *);
 static void arg_sp(int, ainfo_t *);
 static void arg_dp(int, ainfo_t *);
 static void arg_charlen(int, ainfo_t *);
@@ -3151,8 +3147,18 @@ get_chain_pointer_closure(SPTR sdsc)
   }
   nme = addnme(NT_VAR, sdsc, 0, 0);
   if (SCG(sdsc) != SC_DUMMY) {
-    cp = ad_acon(sdsc, cp_offset);
-    cp = ad2ili(IL_LDA, cp, nme);
+    if (PARREFG(sdsc)) {
+      /**
+       * In LLVM, pointer descriptor is not visible in the outlined func.
+       * Use mk_address() which fetches the uplevel ref
+       */ 
+      int addr = mk_address(sdsc);
+      int ili = ad2ili(IL_LDA, addr, nme);
+      cp = ad3ili(IL_AADD, ili, ad_aconi(cp_offset), 0);
+    } else {
+      cp = ad_acon(sdsc, cp_offset);
+      cp = ad2ili(IL_LDA, cp, nme);
+    }
   } else {
     SPTR asym = mk_argasym(sdsc);
     int addr = mk_address(sdsc);
@@ -3215,11 +3221,21 @@ is_asn_closure_call(int sptr)
 static bool
 is_proc_desc_arg(int ili)
 {
+  SPTR sym;
   if (ILI_OPC(ili) == IL_ACON) {
-    SPTR sym = SymConval1(ILI_SymOPND(ili, 1));
-    if (IS_PROC_DESCRG(sym)) {
+    sym = SymConval1(ILI_SymOPND(ili, 1));
+  } else if (IL_TYPE(ILI_OPC(ili)) == ILTY_LOAD) {
+    int op1 = ILI_OPND(ili,1);
+    if (ILI_OPC(op1) == IL_ACON) {
+      sym = SymConval1(ILI_SymOPND(op1, 1));
+    } else {
+      sym = NME_SYM(ILI_OPND(ili,2));
+     }
+  } else {
+    sym = SPTR_NULL;
+  }
+  if (sym > NOSYM && IS_PROC_DESCRG(sym)) {
       return true;
-    }
   }
   return false;
 }
@@ -4775,8 +4791,7 @@ _exp_smove(int dest_nme, int src_nme, int dest_addr, int src_addr, DTYPE dtype)
 
   n = size_of(dtype);
   if (0 && !XBIT(2, 0x1000000)) {
-    chk_block(ad4ili(IL_SMOVEI, ad2ili(IL_SMOVES, src_addr, src_nme), dest_addr,
-                     n, dest_nme));
+    chk_block(ad5ili(IL_SMOVEJ, src_addr, dest_addr, src_nme, dest_nme, n));
     smove_flag = 1; /* structure move in this function */
     return;
   }
@@ -4791,8 +4806,8 @@ _exp_smove(int dest_nme, int src_nme, int dest_addr, int src_addr, DTYPE dtype)
       p_chk_block(ad4ili(IL_SMOVE, src_addr, dest_addr,
                          ad_aconi(n / SMOVE_CHUNK), dest_nme));
     } else {
-      p_chk_block(ad4ili(IL_SMOVEI, ad2ili(IL_SMOVES, src_addr, src_nme),
-                         dest_addr, n, dest_nme));
+      p_chk_block(ad5ili(IL_SMOVEJ, src_addr, dest_addr, src_nme,
+                         dest_nme, n));
     }
     smove_flag = 1; /* structure move in this function */
     offset = (n / SMOVE_CHUNK) * SMOVE_CHUNK;
@@ -5776,10 +5791,6 @@ charlen(SPTR sym)
   int nme;
   int addr;
 
-#if DEBUG
-  assert(CLENG(sym) != 0, "charlen: sym not adjustable-length char", sym,
-         ERR_Severe);
-#endif
   lensym = CLENG(sym);
   if (!INTERNREFG(lensym) && gbl.internal > 1 && INTERNREFG(sym)) {
     /* Its len is passed by value in aux.curr_entry->display after sym */
